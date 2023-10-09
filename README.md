@@ -1,4 +1,4 @@
-<p align="center">
+<p align="center1">
   <img src="res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#free-public-servers">Servers</a> •
   <a href="#raw-steps-to-build">Build</a> •
