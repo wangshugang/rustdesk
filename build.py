@@ -9,6 +9,7 @@ import shutil
 import hashlib
 import argparse
 import sys
+import sysconfig
 
 windows = platform.platform().startswith('Windows')
 osx = platform.platform().startswith(
