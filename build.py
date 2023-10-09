@@ -10,6 +10,7 @@ import hashlib
 import argparse
 import sys
 
+
 windows = platform.platform().startswith('Windows')
 osx = platform.platform().startswith(
     'Darwin') or platform.platform().startswith("macOS")
