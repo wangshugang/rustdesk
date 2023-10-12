@@ -195,6 +195,8 @@ pub struct Socks5Server {
 pub struct Config2 {
     #[serde(default, deserialize_with = "deserialize_string")]
     rendezvous_server: String,
+    #[serde(default, deserialize_with = "deserialize_string")]
+    rendezvous_server_udp: String,
     #[serde(default, deserialize_with = "deserialize_i32")]
     nat_type: i32,
     #[serde(default, deserialize_with = "deserialize_i32")]
@@ -730,6 +732,27 @@ impl Config {
                 log::debug!("Update rendezvous_server in config to {}", host);
                 log::debug!("{:?}", *ONLINE.lock().unwrap());
                 config.rendezvous_server = host;
+                config.store();
+            }
+        }
+    }
+
+    pub fn update_latency_(host_udp: &str, latency: i64) {
+        ONLINE.lock().unwrap().insert(host_udp.to_owned(), latency);
+        let mut host_udp = "".to_owned();
+        let mut delay = i64::MAX;
+        for (tmp_host, tmp_delay) in ONLINE.lock().unwrap().iter() {
+            if tmp_delay > &0 && tmp_delay < &delay {
+                delay = *tmp_delay;
+                host_udp = tmp_host.to_string();
+            }
+        }
+        if !host_udp.is_empty() {
+            let mut config = CONFIG2.write().unwrap();
+            if host_udp != config.rendezvous_server_udp {
+                log::debug!("Update rendezvous_server_udp in config to {}", host_udp);
+                log::debug!("{:?}", *ONLINE.lock().unwrap());
+                config.rendezvous_server_udp = host_udp;
                 config.store();
             }
         }

@@ -38,10 +38,18 @@ lazy_static::lazy_static! {
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
+// pub struct RendezvousMediator {
+//     addr: hbb_common::tokio_socks::TargetAddr<'static>,
+//     host: String,
+//     host_prefix: String,
+//     last_id_pk_registry: String,
+// }
+
 pub struct RendezvousMediator {
-    addr: hbb_common::tokio_socks::TargetAddr<'static>,
+    addr_udp: hbb_common::tokio_socks::TargetAddr<'static>,
     host: String,
-    host_prefix: String,
+    host_udp: String,
+    host_prefix_udp: String,
     last_id_pk_registry: String,
 }
 
@@ -113,24 +121,27 @@ impl RendezvousMediator {
     }
 
     pub async fn start(server: ServerPtr, host: String) -> ResultType<()> {
-        log::info!("start rendezvous mediator of {}", host);
-        let host_prefix: String = host
+        log::info!("start rendezvous/TCP mediator of {}", host);
+        let mut host_udp: String = crate::check_port(&host, RENDEZVOUS_PORT);
+        host_udp = crate::increase_port(&host_udp, 6);
+        log::info!("start rendezvous/UDP mediator of {}", host_udp);
+        let host_udp_prefix: String = host_udp
             .split(".")
             .next()
             .map(|x| {
                 if x.parse::<i32>().is_ok() {
-                    host.clone()
+                    host_udp.clone()
                 } else {
                     x.to_string()
                 }
             })
-            .unwrap_or(host.to_owned());
-        let host = crate::check_port(&host, RENDEZVOUS_PORT);
-        let (mut socket, addr) = socket_client::new_udp_for(&host, CONNECT_TIMEOUT).await?;
+            .unwrap_or(host_udp.to_owned());
+        let (mut socket, addr) = socket_client::new_udp_for(&host_udp, CONNECT_TIMEOUT).await?;
         let mut rz = Self {
-            addr: addr,
+            addr_udp: addr,
             host: host.clone(),
-            host_prefix,
+            host_udp: host_udp.clone(),
+            host_prefix_udp: host_udp_prefix,
             last_id_pk_registry: "".to_owned(),
         };
 
@@ -168,8 +179,8 @@ impl RendezvousMediator {
                     n = 3000;
                 }
                 if (latency - old_latency).abs() > n || old_latency <= 0 {
-                    Config::update_latency(&host, latency);
-                    log::debug!("Latency of {}: {}ms", host, latency as f64 / 1000.);
+                    Config::update_latency_(&host_udp, latency);
+                    log::debug!("Latency of {}: {}ms", host_udp, latency as f64 / 1000.);
                     old_latency = latency;
                 }
             };
@@ -182,7 +193,7 @@ impl RendezvousMediator {
                                     Some(rendezvous_message::Union::RegisterPeerResponse(rpr)) => {
                                         update_latency();
                                         if rpr.request_pk {
-                                            log::info!("request_pk received from {}", host);
+                                            log::info!("request_pk received from {}", host_udp);
                                             allow_err!(rz.register_pk(&mut socket).await);
                                             continue;
                                         }
@@ -192,7 +203,7 @@ impl RendezvousMediator {
                                         match rpr.result.enum_value() {
                                             Ok(register_pk_response::Result::OK) => {
                                                 Config::set_key_confirmed(true);
-                                                Config::set_host_key_confirmed(&rz.host_prefix, true);
+                                                Config::set_host_key_confirmed(&rz.host_prefix_udp, true);
                                                 *SOLVING_PK_MISMATCH.lock().unwrap() = "".to_owned();
                                             }
                                             Ok(register_pk_response::Result::UUID_MISMATCH) => {
@@ -262,19 +273,19 @@ impl RendezvousMediator {
                         if timeout {
                             fails += 1;
                             if fails > MAX_FAILS2 {
-                                Config::update_latency(&host, -1);
+                                Config::update_latency_(&host_udp, -1);
                                 old_latency = 0;
                                 if last_dns_check.elapsed().as_millis() as i64 > DNS_INTERVAL {
                                     // in some case of network reconnect (dial IP network),
                                     // old UDP socket not work any more after network recover
-                                    if let Some((s, addr)) = socket_client::rebind_udp_for(&rz.host).await? {
+                                    if let Some((s, addr)) = socket_client::rebind_udp_for(&rz.host_udp).await? {
                                         socket = s;
-                                        rz.addr = addr;
+                                        rz.addr_udp = addr;
                                     }
                                     last_dns_check = Instant::now();
                                 }
                             } else if fails > MAX_FAILS1 {
-                                Config::update_latency(&host, 0);
+                                Config::update_latency_(&host_udp, 0);
                                 old_latency = 0;
                             }
                         }
@@ -336,7 +347,7 @@ impl RendezvousMediator {
             uuid,
             peer_addr,
             secure,
-            is_ipv4(&self.addr),
+            is_ipv4(&self.addr_udp),
         )
         .await;
         Ok(())
@@ -344,7 +355,7 @@ impl RendezvousMediator {
 
     async fn handle_intranet(&self, fla: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
         let relay_server = self.get_relay_server(fla.relay_server);
-        if !is_ipv4(&self.addr) {
+        if !is_ipv4(&self.addr_udp) {
             // nat64, go relay directly, because current hbbs will crash if demangle ipv6 address
             let uuid = Uuid::new_v4().to_string();
             return self
@@ -435,7 +446,7 @@ impl RendezvousMediator {
             pk: pk.into(),
             ..Default::default()
         });
-        socket.send(&msg_out, self.addr.to_owned()).await?;
+        socket.send(&msg_out, self.addr_udp.to_owned()).await?;
         Ok(())
     }
 
@@ -445,11 +456,11 @@ impl RendezvousMediator {
         }
         {
             let mut solving = SOLVING_PK_MISMATCH.lock().unwrap();
-            if solving.is_empty() || *solving == self.host {
-                log::info!("UUID_MISMATCH received from {}", self.host);
+            if solving.is_empty() || *solving == self.host_udp {
+                log::info!("UUID_MISMATCH received from {}", self.host_udp);
                 Config::set_key_confirmed(false);
                 Config::update_id();
-                *solving = self.host.clone();
+                *solving = self.host_udp.clone();
             } else {
                 return Ok(());
             }
@@ -461,18 +472,18 @@ impl RendezvousMediator {
         if !SOLVING_PK_MISMATCH.lock().unwrap().is_empty() {
             return Ok(());
         }
-        if !Config::get_key_confirmed() || !Config::get_host_key_confirmed(&self.host_prefix) {
+        if !Config::get_key_confirmed() || !Config::get_host_key_confirmed(&self.host_prefix_udp) {
             log::info!(
                 "register_pk of {} due to key not confirmed",
-                self.host_prefix
+                self.host_prefix_udp
             );
             return self.register_pk(socket).await;
         }
         let id = Config::get_id();
         log::trace!(
-            "Register my id {:?} to rendezvous server {:?}",
+            "Register my id {:?} to rendezvous UDP server {:?}",
             id,
-            self.addr,
+            self.addr_udp,
         );
         let mut msg_out = Message::new();
         let serial = Config::get_serial();
@@ -481,7 +492,7 @@ impl RendezvousMediator {
             serial,
             ..Default::default()
         });
-        socket.send(&msg_out, self.addr.to_owned()).await?;
+        socket.send(&msg_out, self.addr_udp.to_owned()).await?;
         Ok(())
     }
 
