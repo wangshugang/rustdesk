@@ -145,7 +145,6 @@ exclude = ["vdi/host", "examples/custom_plugin"]
 LegalCopyright = "Copyright © 2023 Purslane, Inc."
 # this FileDescription overrides package.description
 FileDescription = "RustDesk"
-icon = "res/icon.ico"
 
 [target.'cfg(target_os="windows")'.build-dependencies]
 winres = "0.1"
@@ -164,7 +163,7 @@ hound = "3.5"
 name = "RustDesk"
 identifier = "com.carriez.rustdesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
-osx_minimum_system_version = "10.14"
+# osx_minimum_system_version = "10.14"
 
 #https://github.com/johnthagen/min-sized-rust
 [profile.release]
